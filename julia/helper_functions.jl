@@ -494,7 +494,7 @@ function projOpt(S_step_t, Y_step_t, consts::constraints)
         problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, P*S_proj_t <= P_max]) # problem definition (Convex.jl), total power constraint
         #problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, S_proj_t <= P_max]) # problem definition (Convex.jl), per-transmission power constraint
         #solve!(problem, SCS.Optimizer(), verbose=false) # use SCS solver (Convex.jl, SCS.jl)
-        solve!(problem, ECOS.Optimizer, verbose=false; silent_solver=true) # use ECOS solver (Convex.jl, ECOS.jl)
+        solve!(problem, ECOS.Optimizer; silent=true) # use ECOS solver (Convex.jl, ECOS.jl)
         S_proj_t = evaluate(S_proj_t)
     end
 
@@ -506,7 +506,7 @@ function projOpt(S_step_t, Y_step_t, consts::constraints)
         Y_proj_t = Variable(dim_Y)
         problem = minimize(norm(Y_proj_t - Y_step_t),[Y_proj_t >= 0, Y_proj_t <= 1, C*Y_proj_t <= cache_capacity])
         #solve!(problem, SCS.Optimizer(), verbose=false)
-        solve!(problem, ECOS.Optimizer, verbose=false; silent_solver=true) # use ECOS solver (Convex.jl, ECOS.jl)
+        solve!(problem, ECOS.Optimizer; silent=true) # use ECOS solver (Convex.jl, ECOS.jl)
         Y_proj_t = evaluate(Y_proj_t)
     end
     return S_proj_t, Y_proj_t
