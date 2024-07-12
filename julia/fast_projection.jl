@@ -1,5 +1,24 @@
 using Convex, SCS, BenchmarkTools, Suppressor
 
+function projOntoProb(v,b)
+    mu = sort(v, rev=true)
+    s = [(1/i) * (sum(mu[1:i]) - b) for i in 1:length(v)]
+    rho = argmax( [i * (mu[i] > s[i]) for i in 1:length(v)] )
+    w = [max(v[i] - s[rho], 0) for i in 1:length(v)]
+    return w
+end
+
+function newProj(y,s)
+    x = projOntoProb(y,s)
+    k = 0
+    while sum(x .> 1) > 0 && k < 100
+        x[x .> 1] .= 1
+        x = projOntoProb(x,s)
+        k = k + 1
+    end
+    return x
+end
+    
 function newFastProj(y,s)
     D = length(y)
     y_sorted = sort(y)
@@ -88,7 +107,7 @@ function compareFuncs(iters, input_size)
         y = rand(-.5:.0001:1.5, input_size)
 
         # Time each function
-        fast_proj_stats = @suppress @timed newFastProj(y,s)
+        fast_proj_stats = @suppress @timed newProj(y,s)
         og_proj_stats = @suppress @timed ogProj(y,s)
 
         fast_proj_time = fast_proj_stats.time
