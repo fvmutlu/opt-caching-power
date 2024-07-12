@@ -1,21 +1,4 @@
-using Convex, SCS
-
-function fastProj(v)
-    @time begin
-        mu = sort(v, rev=true)
-        s = [(1/i) * (sum(mu[1:i]) - 1) for i in 1:length(v)]
-        rho = argmax( [i * (mu[i] > s[i]) for i in 1:length(v)] )
-        w = [max(v[i] - s[rho], 0) for i in 1:length(v)]
-        #println(w)
-    end
-    @time begin
-        w_p = Variable(length(v))
-        problem = minimize(norm(w_p - v), [w_p >= 0, sum(w_p) == 1]) # problem definition (Convex.jl), total power constraint)
-        solve!(problem, SCS.Optimizer(verbose=false), verbose=false)
-        w_p = evaluate(w_p)
-        #println(w_p)
-    end
-end
+using Convex, SCS, BenchmarkTools, Suppressor
 
 function newFastProj(y,s)
     D = length(y)
@@ -49,7 +32,6 @@ function newFastProj(y,s)
         end
     end
     gamma = (s + b - D + T[a + 1] - T[b + 1]) / (b - a)
-    println("$a, $b, $gamma")
     if a == D+1
         x = [0 for i=1:D]
     end
@@ -96,3 +78,30 @@ function isApproxEq(x,y,eps)
     return res
 end
     
+
+function compareFuncs(iters, input_size)
+    equal_rate = 0
+    avg_time_fast_proj = 0
+    avg_time_og_proj = 0
+    for _ in 1:iters
+        s = 5
+        y = rand(-.5:.0001:1.5, input_size)
+
+        # Time each function
+        fast_proj_stats = @suppress @timed newFastProj(y,s)
+        og_proj_stats = @suppress @timed ogProj(y,s)
+
+        fast_proj_time = fast_proj_stats.time
+        og_proj_time = og_proj_stats.time
+        fast_proj_res = fast_proj_stats.value
+        og_proj_res = og_proj_stats.value
+
+        equal_outputs = isApproxEq(fast_proj_res, og_proj_res, 1e-2)
+
+        equal_rate += equal_outputs
+        avg_time_fast_proj += fast_proj_time
+        avg_time_og_proj += og_proj_time
+    end
+
+    return equal_rate/iters, avg_time_fast_proj/iters, avg_time_og_proj/iters 
+end
