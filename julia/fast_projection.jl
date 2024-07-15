@@ -1,6 +1,11 @@
 using Convex, SCS, BenchmarkTools, Suppressor
 
-function projOntoProb(v,b)
+function projOntoSimplex(v,b)
+    if (sum(v[v .> 0]) < b)
+        w = copy(v)
+        w[v .< 0] .= 0
+        return w
+    end
     mu = sort(v, rev=true)
     s = [(1/i) * (sum(mu[1:i]) - b) for i in 1:length(v)]
     rho = argmax( [i * (mu[i] > s[i]) for i in 1:length(v)] )
@@ -8,18 +13,80 @@ function projOntoProb(v,b)
     return w
 end
 
-function newProj(y,s)
-    x = projOntoProb(y,s)
+function ogSimplex(y,s)
+    w_p = Variable(length(y))
+    problem = minimize(norm(w_p - y), [w_p >= 0, sum(w_p) <= s])
+    solve!(problem, SCS.Optimizer; silent=true)
+    w_p = evaluate(w_p)
+    return w_p
+end
+
+function dykstraProj(v,z)
+    max_iters = 1000
+    tol = 1e-4
+    delta = Inf
+
+    xk = copy(v)
+    pk = zero(v)
+    qk = zero(v)
+
     k = 0
-    while sum(x .> 1) > 0 && k < 100
-        x[x .> 1] .= 1
-        x = projOntoProb(x,s)
-        k = k + 1
+    while k < max_iters && delta >= tol
+        # Project onto scaled simplex
+        yk = projOntoSimplex(xk+pk,z) 
+        pk1 = xk + pk - yk
+        # Project by capping
+        xk1 = yk + qk
+        xk1[xk1 .> 1] .= 1
+        qk1 = yk + qk - xk1
+        # Update
+        xk = copy(xk1)
+        pk = copy(pk1)
+        qk = copy(qk1)
+        delta = norm(xk1 - xk)
+        k = k+1
     end
-    return x
+    if k >= max_iters
+        println("Dykstra projection did not converge")
+    end
+    return xk
+end
+
+function ogProj(y,s)
+    w_p = Variable(length(y))
+    problem = minimize(norm(w_p - y), [w_p >= 0, w_p <= 1, sum(w_p) <= s])
+    solve!(problem, SCS.Optimizer; silent=true)
+    w_p = evaluate(w_p)
+    return w_p
 end
     
-function newFastProj(y,s)
+function compareFuncs(iters, input_size)
+    diff = 0
+    avg_time_fast_proj = 0
+    avg_time_og_proj = 0
+    for _ in 1:iters
+        s = 5
+        y = rand(-.25:.0001:2, input_size)
+
+        # Time each function
+        fast_proj_stats = @suppress @timed dykstraProj(y,s)
+        og_proj_stats = @suppress @timed ogProj(y,s)
+
+        fast_proj_time = fast_proj_stats.time
+        og_proj_time = og_proj_stats.time
+        fast_proj_res = fast_proj_stats.value
+        og_proj_res = og_proj_stats.value
+
+        diff = diff + norm(fast_proj_res - og_proj_res)
+        avg_time_fast_proj += fast_proj_time
+        avg_time_og_proj += og_proj_time
+    end
+
+    return diff/iters, avg_time_fast_proj/iters, avg_time_og_proj/iters 
+end
+
+
+function wangProj(y,s)
     D = length(y)
     y_sorted = sort(y)
     T = [0.0]
@@ -72,55 +139,4 @@ function newFastProj(y,s)
         x = (y .> thresh) .* 1
     end
     return x
-end
-
-function ogProj(y,s)
-    w_p = Variable(length(y))
-    problem = minimize(norm(w_p - y), [w_p >= 0, w_p <= 1, sum(w_p) == s]) # problem definition (Convex.jl), total power constraint)
-    solve!(problem, SCS.Optimizer; silent=true)
-    w_p = evaluate(w_p)
-    return w_p
-end
-
-function isApproxEq(x,y,eps)
-    res = true
-    if length(x) != length(y)
-        println("Mismatched dims")
-        return false
-    end
-    for i = 1:length(x)
-        if abs(x[i] - y[i]) > eps
-            res = false
-            break
-        end
-    end
-    return res
-end
-    
-
-function compareFuncs(iters, input_size)
-    equal_rate = 0
-    avg_time_fast_proj = 0
-    avg_time_og_proj = 0
-    for _ in 1:iters
-        s = 5
-        y = rand(-.5:.0001:1.5, input_size)
-
-        # Time each function
-        fast_proj_stats = @suppress @timed newProj(y,s)
-        og_proj_stats = @suppress @timed ogProj(y,s)
-
-        fast_proj_time = fast_proj_stats.time
-        og_proj_time = og_proj_stats.time
-        fast_proj_res = fast_proj_stats.value
-        og_proj_res = og_proj_stats.value
-
-        equal_outputs = isApproxEq(fast_proj_res, og_proj_res, 1e-2)
-
-        equal_rate += equal_outputs
-        avg_time_fast_proj += fast_proj_time
-        avg_time_og_proj += og_proj_time
-    end
-
-    return equal_rate/iters, avg_time_fast_proj/iters, avg_time_og_proj/iters 
 end

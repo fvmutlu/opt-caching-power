@@ -51,6 +51,95 @@ function subMethod(SY_0, funcs, consts)
             S_step_t = S_t - step_size_S*d_S_t
             Y_step_t = Y_t - step_size_Y*d_Y_t
             S_proj_t, Y_proj_t = projOpt(S_step_t, Y_step_t, consts); # Projection
+            #S_proj_t, Y_proj_t = newProjOpt(S_step_t, Y_step_t, consts); # Projection
+            S_t_prev = S_t # We need to save S^t for the while condition
+            Y_t_prev = Y_t # We need to save Y^t for the while condition
+            S_t = S_proj_t # S^{t+1} = \bar{S}^t
+            Y_t = Y_proj_t # Y^{t+1} = \bar{Y}^t
+            D_t = ThreadsX.sum( ThreadsX.collect(F[m](S_t) for m in 1:length(F)) .* ThreadsX.collect(G[n](Y_t) for n in 1:length(G)) )
+            if D_t > D_hat_t # Decrease delta when zigzagging occurs
+                div_ctr += 1
+                if div_ctr==5
+                    delta = delta / sqrt(dim_val)
+                    dim_val += 1
+                    div_ctr = 0;
+                    slow_ctr = 0;
+                end
+            elseif D_hat_t - D_t <= 10*epsilon
+                slow_ctr += 1
+                if slow_ctr==5  # Increase delta when convergence is slow
+                    delta = delta * sqrt(dim_val)
+                    slow_ctr = 0
+                    div_ctr = 0
+                end
+            end
+        end
+        if abs(D_hat_t - D_t)/D_hat_t <= 0.005
+            termination_counter += 1
+        else
+            termination_counter = 0
+        end
+        #println((D_t,D_hat_t,termination_counter))
+        t += 1
+
+        D_t_arr[t] = D_hat_t
+        cputime_arr[t] = cputime
+
+        if t > MAX_ITER
+            println("SUB didn't terminate in maximum number of iterations.")
+            break
+        end
+    end
+    filter!(!iszero,D_t_arr)
+    filter!(!iszero,cputime_arr)
+    return (D_t, S_t, Y_t, D_t_arr, cputime_arr)
+end
+
+function subMethodNewProj(SY_0, funcs, consts)
+    MAX_ITER = 250
+
+    numof_initpoints = length(SY_0)
+    F = funcs.F
+    grad_S_F = funcs.grad_S_F
+    G = funcs.G
+    subgrad_Y_G = funcs.subgrad_Y_G
+
+    S_0 = SY_0[1]
+    Y_0 = SY_0[2]
+    D_0 = ThreadsX.sum( ThreadsX.collect(F[m](S_0) for m in 1:length(F)) .* ThreadsX.collect(G[n](Y_0) for n in 1:length(G)) )
+    S_t = S_0
+    Y_t = Y_0
+    S_t_prev = S_t
+    Y_t_prev = Y_t
+    D_t = D_0
+
+    D_t_arr = zeros(Float64,MAX_ITER + 1)
+    D_t_arr[1] = D_0
+    cputime_arr = zeros(Float64,MAX_ITER + 1)
+    cputime_arr[1] = 1e-9
+    termination_counter = 0
+
+    D_hat_t = Inf
+    #delta_0 = D_0/2
+    delta = D_t/2
+    div_ctr = 0
+    dim_val = 2
+    slow_ctr = 0
+    cputime = 0
+    t = 1
+    while t == 1 || termination_counter < 3
+    #while t == 1 || ( (abs(D_hat_t - D_t) >= epsilon) && (norm(Y_t_prev - Y_t) >= epsilon_Y) && (norm(S_t_prev - S_t) >= epsilon_S) )
+        cputime += @elapsed begin
+            D_hat_t = min(D_t, D_hat_t) # If current objective is the minimum so far, replace D_hat
+            d_S_t = hcat(ThreadsX.collect(grad_S_F[m](S_t) for m in 1:length(grad_S_F))...) * ThreadsX.collect(G[n](Y_t) for n in 1:length(G))
+            d_Y_t = hcat(ThreadsX.collect(subgrad_Y_G[m](Y_t) for m in 1:length(subgrad_Y_G))...) * ThreadsX.collect(F[n](S_t) for n in 1:length(F))
+            #step_size_S = (D_t - D_hat_t + delta_0/t) / (norm(d_S_t)^2) # Polyak step size calculation
+            #step_size_Y = (D_t - D_hat_t + delta_0/t) / (norm(d_Y_t)^2) # Polyak step size calculation
+            step_size_S = (D_t - D_hat_t + delta) / (norm(d_S_t)^2) # Polyak step size calculation
+            step_size_Y = (D_t - D_hat_t + delta) / (norm(d_Y_t)^2) # Polyak step size calculation
+            S_step_t = S_t - step_size_S*d_S_t
+            Y_step_t = Y_t - step_size_Y*d_Y_t
+            S_proj_t, Y_proj_t = newProjOpt(S_step_t, Y_step_t, consts); # Projection
             S_t_prev = S_t # We need to save S^t for the while condition
             Y_t_prev = Y_t # We need to save Y^t for the while condition
             S_t = S_proj_t # S^{t+1} = \bar{S}^t

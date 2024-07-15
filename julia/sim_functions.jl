@@ -85,7 +85,7 @@ end
 ## Run optimization over different initial points
 
 function runSim(params::other_parameters = params, netparams::network_parameters = netparams, constparams::constraint_parameters = constparams, probcomps::problem_components = probcomps)
-    open("/home/volkan/Repos/wireless-hetnet-caching/julia/convergenceresults.txt","a") do io
+    open("/home/volkan/Repos/wireless-hetnet-caching/julia/new_conv_res.txt","a") do io
         println(io, "--------")
         println(io, "--params--")
         println(io, params)
@@ -110,6 +110,18 @@ function runSim(params::other_parameters = params, netparams::network_parameters
     @printf("Delay: %.2f, Not Rounded: %.2f\n", D_0_sub, D_sub)
     D_0_sub, S_sub = pwrOnly(S_sub, X_sub, funcs, consts)
     @printf("One more pwr: %.2f\n",D_0_sub)
+    println(probcomps.consts.P * S_sub)
+    println(probcomps.consts.C * Y_sub)
+
+    println(" -- SUB NEW PROJ -- ")
+    (D_subn, S_subn, Y_subn, D_subn_arr, cputime_subn_arr) = subMethodNewProj(SY_0, funcs, consts)
+    X_sub = pipageRounding(funcs.F, funcs.Gintegral, S_subn, Y_subn, params.M, netparams.V, consts.cache_capacity)
+    D_0_sub = sum([ funcs.F[m](S_subn) for m in 1:length(funcs.F) ] .* [ funcs.Gintegral[n](X_sub) for n in 1:length(funcs.G) ])
+    @printf("Delay: %.2f, Not Rounded: %.2f\n", D_0_sub, D_subn)
+    D_0_sub, S_subn = pwrOnly(S_subn, X_sub, funcs, consts)
+    @printf("One more pwr: %.2f\n",D_0_sub)
+    println(probcomps.consts.P * S_subn)
+    println(probcomps.consts.C * Y_subn)
 
     println(" -- ALT -- ")
     (D_alt, S_alt, Y_alt, D_alt_arr, cputime_alt_arr) = altMethod(SY_0, funcs, consts)
@@ -118,11 +130,18 @@ function runSim(params::other_parameters = params, netparams::network_parameters
     @printf("Delay: %.2f, Not Rounded: %.2f\n", D_0_alt, D_alt)
     D_0_alt, S_alt = pwrOnly(S_alt, X_alt, funcs, consts)
     @printf("One more pwr: %.2f\n",D_0_alt)
+    println(probcomps.consts.P * S_alt)
+    println(probcomps.consts.C * Y_alt)
 
-    open("/home/volkan/Repos/wireless-hetnet-caching/julia/convergenceresults.txt","a") do io
+    @printf("SUB/ALT norms: (%.2f, %.2f) \n SUB/SUBNEWPROJ norms: (%.2f, %.2f) \n SUBNEWPROJ/ALT norms: (%.2f, %.2f)", norm(S_sub - S_alt), norm(Y_sub - Y_alt), norm(S_sub - S_subn), norm(Y_sub - Y_subn), norm(S_subn - S_alt), norm(Y_subn - Y_alt))
+
+    open("/home/volkan/Repos/wireless-hetnet-caching/julia/new_conv_res.txt","a") do io
         println(io,"-- SUB --")
         println(io,D_sub_arr)
         println(io,cputime_sub_arr)
+        println(io,"-- SUB NEW PROJ --")
+        println(io,D_subn_arr)
+        println(io,cputime_subn_arr)
         println(io,"-- ALT --")
         println(io,D_alt_arr)
         println(io,cputime_alt_arr)

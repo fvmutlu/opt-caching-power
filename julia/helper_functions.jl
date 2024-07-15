@@ -1,4 +1,5 @@
 using Convex, ECOS, Random, Distributions, StatsBase, Dates, Combinatorics, DataStructures, Graphs, SimpleWeightedGraphs, GeometryBasics, VoronoiCells, Plots
+include("fast_projection.jl")
 
 struct network_graph # Will add more fields if necessary
     paths::Array{Array{Int64,1},2} # Why does this have 2 on the second dimension instead of 1?
@@ -445,19 +446,6 @@ function averageRequests(T::Int64, period::Int64, pd::Array{Float64,1}, numof_re
     return requests(requested_items, request_rates), items_large, rates_large
 end
 
-#= function makeConsts(V::Int64, M::Int64, c_mc::Int64, c_sc::Int64, sc_nodes::Array{Int64,1}, P_min::Float64, P_max::Float64) # TODO: Add per-node or other types of constraints?
-    cache_capacity = zeros(Int64,V) # For cache capacity constraint C*Y <= cache_capacity
-    cache_capacity[1] = c_mc
-    cache_capacity[sc_nodes] .= c_sc
-
-    C = zeros(Int64, V,M*V) # For cache capacity constraint C*Y <= cache_capacity
-    for n in 1:V
-        C[ n, (n-1)*M+1 : n*M ] .= 1 # In matrix C, mark entries corresponding to node n's items as 1
-    end
-
-    return constraints(P_min, P_max, cache_capacity, C)
-end =#
-
 function makeConsts(V::Int64, M::Int64, sc_nodes::Array{Int64,1}, edges::Array{Int64,2}, c_mc::Int64, c_sc::Int64, P_min::Float64, P_max::Float64) # TODO: Add per-node or other types of constraints?
     cache_capacity = zeros(Int64,V) # For cache capacity constraint C*Y <= cache_capacity
     cache_capacity[1] = c_mc
@@ -490,10 +478,8 @@ function projOpt(S_step_t, Y_step_t, consts::constraints)
     else
         dim_S = size(S_step_t, 1) # length of power vector
         S_proj_t = Variable(dim_S) # problem variable, a column vector (Convex.jl)
-        #problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, ones(Int64, 1, dim_S)*S_proj_t <= P_max]) # problem definition (Convex.jl), total power constraint
-        problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, P*S_proj_t <= P_max]) # problem definition (Convex.jl), total power constraint
-        #problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, S_proj_t <= P_max]) # problem definition (Convex.jl), per-transmission power constraint
-        #solve!(problem, SCS.Optimizer(), verbose=false) # use SCS solver (Convex.jl, SCS.jl)
+        problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, P*S_proj_t <= P_max]) # problem definition (Convex.jl), per-node total power constraint
+        #solve!(problem, SCS.Optimizer; silent=true) # use SCS solver (Convex.jl, SCS.jl)
         solve!(problem, ECOS.Optimizer; silent=true) # use ECOS solver (Convex.jl, ECOS.jl)
         S_proj_t = evaluate(S_proj_t)
     end
@@ -505,51 +491,51 @@ function projOpt(S_step_t, Y_step_t, consts::constraints)
         dim_Y = size(Y_step_t,1)
         Y_proj_t = Variable(dim_Y)
         problem = minimize(norm(Y_proj_t - Y_step_t),[Y_proj_t >= 0, Y_proj_t <= 1, C*Y_proj_t <= cache_capacity])
-        #solve!(problem, SCS.Optimizer(), verbose=false)
+        #solve!(problem, SCS.Optimizer; silent=true)
         solve!(problem, ECOS.Optimizer; silent=true) # use ECOS solver (Convex.jl, ECOS.jl)
         Y_proj_t = evaluate(Y_proj_t)
     end
     return S_proj_t, Y_proj_t
 end
 
-#= function projOpt(S_step_t, Y_step_t, consts::constraints)
+function newProjOpt(S_step_t, Y_step_t, consts::constraints)
     P_min = consts.P_min
     P_max = consts.P_max
     C = consts.C
+    P = consts.P
     cache_capacity = consts.cache_capacity
-    
 
-    # Minimum norm subproblem for S projection
+    # S projection
     if S_step_t == 0 # Skip power optimization if all zeros were passed (relevant for ALT)
         S_proj_t = 0
     else
-        dim_S = size(S_step_t, 1) # length of power vector
-        S_proj_t = Variable(dim_S) # problem variable, a column vector (Convex.jl)
-        problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, ones(Int64, 1, dim_S)*S_proj_t <= P_max]) # problem definition (Convex.jl), total power constraint
-        #problem = minimize(norm(S_proj_t - S_step_t),[S_proj_t >= P_min, S_proj_t <= P_max]) # problem definition (Convex.jl), per-transmission power constraint
-        solve!(problem, SCS.Optimizer(verbose=false), verbose=false) # use SCS solver (Convex.jl, SCS.jl)
-        S_proj_t = evaluate(S_proj_t)
+        S_proj_t = zero(S_step_t)
+        num_nodes = size(P, 1)
+        for r in 1:num_nodes
+            indices = findall(==(1), P[r,:])
+            if !isempty(indices)
+                S_proj_t[indices] = projOntoSimplex(S_step_t[indices], P_max)
+            end
+        end
+        S_proj_t = S_proj_t .+ P_min
     end
 
-    # Minimum norm subproblem for Y projection
+    # Y projection
     if Y_step_t == 0
         Y_proj_t = 0
     else
-        idx = findall(i -> cache_capacity[i] > 0, 1:length(cache_capacity))
-        Y_temp = deepcopy(reshape(Y_step_t, (convert(Int64,size(Y_step_t,1)/length(cache_capacity)), length(cache_capacity))))
-        Y_temp = Y_temp[:,idx]
-        Y_temp = vcat(Y_temp...)
-        dim_Y = length(Y_temp)
-        Y_proj_t = Variable(dim_Y)
-        problem = minimize(norm(Y_proj_t - Y_temp),[Y_proj_t >= 0, Y_proj_t <= 1, ones(Int,length(idx),dim_Y)*Y_proj_t <= cache_capacity[idx]])
-        solve!(problem, SCS.Optimizer(verbose=false), verbose=false)
-        Y_proj_t = evaluate(Y_proj_t)
-        Y_temp = zeros(Float64, convert(Int64,size(Y_step_t,1)/length(cache_capacity)), length(cache_capacity))
-        Y_temp[:,idx] = reshape(Y_proj_t, convert(Int64,size(Y_step_t,1)/length(cache_capacity)), length(idx))
-        Y_proj_t = vcat(Y_temp...)
+        Y_proj_t = zero(Y_step_t)
+        num_nodes = size(C, 1)
+        for r in 1:num_nodes
+            indices = findall(==(1), C[r,:])
+            if !isempty(indices) && cache_capacity[r] > 0
+                Y_proj_t[indices] = dykstraProj(Y_step_t[indices], cache_capacity[r])
+            end
+        end
     end
+
     return S_proj_t, Y_proj_t
-end =# # ATTEMPT TO SPEED UP CACHE OPTIMIZATION BY REMOVING SPARSE PART OF Y
+end
 
 function randomInitPoint(dim_S, dim_Y, weight, consts)
     Random.seed!(Dates.value(Dates.now())) # set the seed with current system time
